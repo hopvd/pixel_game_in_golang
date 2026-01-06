@@ -30,6 +30,7 @@ type Enemy struct {
 	FollowsPlayer bool
 	Health        uint
 	MaxHealth     uint
+	Scale         float64 // Scale factor for larger enemies
 }
 
 type Potion struct {
@@ -57,6 +58,8 @@ type Game struct {
 	frameCount int
 	// Track previous key state to detect key press
 	spacePressed bool
+	// Level system
+	currentLevel int
 	// Initial state for reset
 	initialPlayerX, initialPlayerY float64
 	initialPlayerHealth            uint
@@ -147,7 +150,7 @@ func (g *Game) Update() error {
 		for _, enemy := range g.enemies {
 			if enemy.Health > 0 {
 				// Check collision between shuriken and enemy
-				if checkShurikenEnemyCollision(shuriken, enemy.Sprite) {
+				if checkShurikenEnemyCollision(shuriken, enemy.Sprite, enemy.Scale) {
 					// Enemy takes damage
 					if enemy.Health > 0 {
 						enemy.Health--
@@ -189,7 +192,7 @@ func (g *Game) Update() error {
 			}
 
 			// Check collision between player and enemy with smaller collision area
-			if checkPlayerEnemyCollision(g.player.Sprite, enemy.Sprite) {
+			if checkPlayerEnemyCollision(g.player.Sprite, enemy.Sprite, enemy.Scale) {
 				// Only damage if cooldown is 0
 				if g.player.damageCooldown <= 0 {
 					if g.player.Health > 0 {
@@ -221,6 +224,11 @@ func (g *Game) Update() error {
 			g.potions = append(g.potions[:i], g.potions[i+1:]...)
 			i-- // Decrease index i to not skip the next element
 		}
+	}
+
+	// Check if all enemies are defeated
+	if g.checkAllEnemiesDefeated() {
+		g.loadNextLevel()
 	}
 
 	return nil
@@ -285,6 +293,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 	for _, enemy := range g.enemies {
 		opts.GeoM.Reset()
+
+		// Apply scale first, then translate
+		if enemy.Scale != 1.0 {
+			opts.GeoM.Scale(enemy.Scale, enemy.Scale)
+		}
 		opts.GeoM.Translate(enemy.X, enemy.Y)
 
 		if enemy.Health > 0 {
@@ -297,7 +310,11 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			)
 		} else {
 			// Draw only the head (top 8x8 pixels) when dead
-			opts.GeoM.Translate(0, 4) // Move down a bit to center the head
+			opts.GeoM.Reset()
+			if enemy.Scale != 1.0 {
+				opts.GeoM.Scale(enemy.Scale, enemy.Scale)
+			}
+			opts.GeoM.Translate(enemy.X, enemy.Y+4*enemy.Scale) // Move down a bit to center the head
 			screen.DrawImage(
 				enemy.Img.SubImage(
 					image.Rect(0, 0, 16, 8), // Only top half (head)
@@ -340,9 +357,15 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	for _, enemy := range g.enemies {
 		// Only draw health bar for alive enemies
 		if enemy.Health > 0 {
-			drawHealthBar(screen, enemy.X, enemy.Y-6, enemy.Health, enemy.MaxHealth, color.RGBA{255, 0, 0, 255}) // Red for enemies
+			// Adjust health bar position based on enemy scale
+			healthBarY := enemy.Y - 6*enemy.Scale
+			drawHealthBar(screen, enemy.X, healthBarY, enemy.Health, enemy.MaxHealth, color.RGBA{255, 0, 0, 255}) // Red for enemies
 		}
 	}
+
+	// Display level info
+	levelText := fmt.Sprintf("Level: %d", g.currentLevel+1)
+	ebitenutil.DebugPrintAt(screen, levelText, 10, 10)
 
 	// Display Game Over message if player lost
 	if g.gameOver {
@@ -360,16 +383,18 @@ func checkCollision(s1, s2 *Sprite) bool {
 }
 
 // checkPlayerEnemyCollision checks collision with a smaller area for more precise collision
-func checkPlayerEnemyCollision(player, enemy *Sprite) bool {
+func checkPlayerEnemyCollision(player, enemy *Sprite, enemyScale float64) bool {
 	// Use smaller collision area (8x8 pixels) - player and enemy must be closer to collide
 	collisionSize := 8.0
-	// Center the collision box within the 16x16 sprite
-	offset := (16.0 - collisionSize) / 2.0
+	enemySize := 16.0 * enemyScale
+	// Center the collision box within the sprite
+	playerOffset := (16.0 - collisionSize) / 2.0
+	enemyOffset := (enemySize - collisionSize) / 2.0
 
-	playerCenterX := player.X + offset
-	playerCenterY := player.Y + offset
-	enemyCenterX := enemy.X + offset
-	enemyCenterY := enemy.Y + offset
+	playerCenterX := player.X + playerOffset
+	playerCenterY := player.Y + playerOffset
+	enemyCenterX := enemy.X + enemyOffset
+	enemyCenterY := enemy.Y + enemyOffset
 
 	return playerCenterX < enemyCenterX+collisionSize &&
 		playerCenterX+collisionSize > enemyCenterX &&
@@ -378,13 +403,82 @@ func checkPlayerEnemyCollision(player, enemy *Sprite) bool {
 }
 
 // checkShurikenEnemyCollision checks collision between shuriken and enemy
-func checkShurikenEnemyCollision(shuriken *Shuriken, enemy *Sprite) bool {
-	// Shuriken is 8x8, enemy is 16x16
+func checkShurikenEnemyCollision(shuriken *Shuriken, enemy *Sprite, enemyScale float64) bool {
+	// Shuriken is 8x8, enemy size depends on scale
 	shurikenSize := 8.0
-	return shuriken.X < enemy.X+16 &&
+	enemySize := 16.0 * enemyScale
+	return shuriken.X < enemy.X+enemySize &&
 		shuriken.X+shurikenSize > enemy.X &&
-		shuriken.Y < enemy.Y+16 &&
+		shuriken.Y < enemy.Y+enemySize &&
 		shuriken.Y+shurikenSize > enemy.Y
+}
+
+// checkAllEnemiesDefeated checks if all enemies are dead
+func (g *Game) checkAllEnemiesDefeated() bool {
+	for _, enemy := range g.enemies {
+		if enemy.Health > 0 {
+			return false
+		}
+	}
+	return len(g.enemies) > 0 // Only return true if there were enemies to begin with
+}
+
+// loadNextLevel loads the next level
+func (g *Game) loadNextLevel() {
+	g.currentLevel++
+	fmt.Printf("Level %d completed! Loading level %d...\n", g.currentLevel-1, g.currentLevel)
+
+	// Clear all shurikens
+	g.shurikens = []*Shuriken{}
+
+	// Reset player position to center
+	g.player.X = 160.0
+	g.player.Y = 120.0
+
+	// Load enemies based on level
+	if g.currentLevel == 1 {
+		// Level 1: 2 enemies with 10 health
+		g.enemies = []*Enemy{
+			{
+				&Sprite{
+					Img: g.skeletonImg,
+					X:   100.0,
+					Y:   100.0,
+				},
+				true,
+				10,  // Health
+				10,  // MaxHealth
+				1.0, // Scale (normal size)
+			},
+			{
+				&Sprite{
+					Img: g.skeletonImg,
+					X:   150.0,
+					Y:   50.0,
+				},
+				true,
+				10,  // Health
+				10,  // MaxHealth
+				1.0, // Scale (normal size)
+			},
+		}
+	} else if g.currentLevel == 2 {
+		// Level 2: 1 large enemy with 50 health
+		g.enemies = []*Enemy{
+			{
+				&Sprite{
+					Img: g.skeletonImg,
+					X:   160.0,
+					Y:   120.0,
+				},
+				true,
+				50,  // Health
+				50,  // MaxHealth
+				2.0, // Scale (2x size - larger enemy)
+			},
+		}
+		fmt.Println("Boss enemy appeared!")
+	}
 }
 
 func (g *Game) Layout(outsideWidth, outsideHeight int) (screenWidth, screenHeight int) {
@@ -425,6 +519,9 @@ func drawHealthBar(screen *ebiten.Image, x, y float64, currentHealth, maxHealth 
 
 // resetGame resets the game to its initial state
 func (g *Game) resetGame() {
+	// Reset level
+	g.currentLevel = 0
+
 	// Reset player position and health
 	g.player.X = g.initialPlayerX
 	g.player.Y = g.initialPlayerY
@@ -432,14 +529,30 @@ func (g *Game) resetGame() {
 	g.player.damageCooldown = 0
 	g.frameCount = 0
 
-	// Reset enemies to initial positions and health
-	for i, enemy := range g.enemies {
-		if i < len(g.initialEnemyPositions) {
-			pos := g.initialEnemyPositions[i]
-			enemy.X = pos.X
-			enemy.Y = pos.Y
-			enemy.Health = g.initialEnemyHealth
-		}
+	// Reset enemies to initial positions and health (level 1)
+	g.enemies = []*Enemy{
+		{
+			&Sprite{
+				Img: g.skeletonImg,
+				X:   100.0,
+				Y:   100.0,
+			},
+			true,
+			10,  // Health
+			10,  // MaxHealth
+			1.0, // Scale (normal size)
+		},
+		{
+			&Sprite{
+				Img: g.skeletonImg,
+				X:   150.0,
+				Y:   50.0,
+			},
+			true,
+			10,  // Health
+			10,  // MaxHealth
+			1.0, // Scale (normal size)
+		},
 	}
 
 	// Reset potions - recreate from initial state
@@ -546,7 +659,7 @@ func main() {
 		{X: 100.0, Y: 100.0},
 		{X: 150.0, Y: 50.0},
 	}
-	initialEnemyHealth := uint(3)
+	initialEnemyHealth := uint(10)
 
 	initialPotionData := []struct {
 		X, Y    float64
@@ -573,8 +686,9 @@ func main() {
 					Y:   100.0,
 				},
 				true,
-				3, // Health
-				3, // MaxHealth
+				10,  // Health
+				10,  // MaxHealth
+				1.0, // Scale (normal size)
 			},
 			{
 				&Sprite{
@@ -583,10 +697,12 @@ func main() {
 					Y:   50.0,
 				},
 				true,
-				3, // Health
-				3, // MaxHealth
+				10,  // Health
+				10,  // MaxHealth
+				1.0, // Scale (normal size)
 			},
 		},
+		currentLevel: 0, // Start at level 0 (will be level 1 when displayed)
 		potions: []*Potion{
 			{
 				&Sprite{
