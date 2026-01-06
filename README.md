@@ -18,7 +18,7 @@ A [video series](https://youtube.com/playlist?list=PLvN4CrYN-8i7xnODFyCMty6ossz4
 - **Game Over**: Game ends when player health reaches 0
 - **Restart**: Press R to restart after game over
 
-## How to Run 2222222
+## How to Run 222222
 
 ### Prerequisites
 - Go 1.22.4 or later
